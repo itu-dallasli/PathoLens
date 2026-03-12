@@ -1,0 +1,120 @@
+# ============================================================
+# PathoLens — Default Configuration
+# ============================================================
+# Override per-module settings in the corresponding YAML files
+# or via CLI arguments. All paths are relative to project root
+# unless stated otherwise.
+# ============================================================
+
+system:
+  device: "cuda:0"
+  seed: 42
+  num_workers: 8
+  mixed_precision: true        # Use FP16/BF16 via torch AMP
+  log_level: "INFO"            # DEBUG | INFO | WARNING | ERROR
+
+# ─── Paths ───────────────────────────────────────────────────
+paths:
+  data_root: "data"
+  raw_wsi_dir: "data/raw"
+  processed_dir: "data/processed"
+  patches_dir: "data/processed/patches"
+  embeddings_dir: "data/processed/embeddings"
+  features_dir: "data/processed/features"
+  faiss_index_dir: "data/processed/faiss_index"
+  metadata_dir: "data/metadata"
+  checkpoints_dir: "checkpoints"
+  results_dir: "results"
+  logs_dir: "logs"
+
+# ─── WSI Preprocessing (FR-01) ──────────────────────────────
+preprocessing:
+  patch_size: 256              # Pixels per side
+  magnification: 20            # Target magnification (20x)
+  tissue_threshold: 0.5        # Min tissue ratio in a patch
+  overlap: 0                   # Overlap between patches (0 = no overlap)
+  thumbnail_size: 1024         # Thumbnail edge for segmentation
+  segmentation:
+    method: "otsu"             # otsu | adaptive
+    median_blur_ksize: 7       # Pre-blur kernel size
+    morph_kernel_size: 5       # Morphological op kernel
+    min_contour_area: 5000     # Discard small contours (px²)
+
+# ─── Patch Embedding (FR-02) ────────────────────────────────
+embedding:
+  model_name: "MahmoodLab/UNI"
+  architecture: "vit_large_patch16_224"
+  embedding_dim: 1024
+  batch_size: 256
+  normalize: true              # L2-normalise embeddings
+  input_size: 224              # Resize before model forward
+
+# ─── Sequence Model — Mamba (FR-03) ─────────────────────────
+sequence_model:
+  d_model: 512
+  d_state: 16
+  d_conv: 4
+  expand_factor: 2
+  n_layers: 4
+  dropout: 0.1
+  region_size: 64              # Patches per region for aggregation
+  training:
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-2
+    epochs: 50
+    batch_size: 1              # 1 slide per batch (MIL)
+    gradient_checkpointing: true
+    scheduler: "cosine"
+    warmup_epochs: 5
+
+# ─── CMEA Case Retrieval (FR-04) ────────────────────────────
+retrieval:
+  index_type: "IVFFlat"       # IVFFlat | HNSW
+  n_list: 100                  # IVF clusters
+  n_probe: 32                  # Probes at search time
+  top_k: 5
+  similarity_metric: "cosine"  # cosine | l2
+  rerank: true                 # Two-stage search
+
+# ─── KARG Entity Extraction (FR-05) ─────────────────────────
+entity_extraction:
+  llm_backend: "local"         # local | openai | anthropic
+  llm_model: "BioMistral-7B"  # Default; user may override
+  max_tokens: 2048
+  temperature: 0.1
+  entity_types:
+    - tumor_type
+    - histological_grade
+    - tumor_stage
+    - receptor_status
+    - ki67_index
+    - lymph_node_status
+    - surgical_margins
+    - necrosis
+  cross_validation: true       # Majority vote across reports
+
+# ─── RAAF Explainability (FR-06) ────────────────────────────
+explainability:
+  attention_heads: 8
+  mil_pooling: "gated_attention"  # gated_attention | mean | max
+  heatmap_resolution: 1024
+  overlay_alpha: 0.4
+  colormap: "jet"              # jet | viridis | inferno
+  gaussian_sigma: 5.0          # Heatmap smoothing
+
+# ─── CSAL Report Generation (FR-07) ─────────────────────────
+report_generation:
+  fhir_version: "R4"
+  confidence_threshold: 0.7   # Below → "preliminary" status
+  language: "en"
+  include_evidence_links: true
+  style_divergence_target: 0.20  # Max KL divergence
+
+# ─── API Server (FR-08) ─────────────────────────────────────
+api:
+  host: "0.0.0.0"
+  port: 8000
+  max_upload_size_mb: 5000
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:5173"
