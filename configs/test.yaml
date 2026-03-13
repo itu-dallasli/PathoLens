@@ -1,0 +1,103 @@
+# ============================================================
+# PathoLens — Test Configuration
+# ============================================================
+# Overrides default.yaml for fast, CPU-only, no-model-download
+# unit and integration tests.
+# ============================================================
+
+system:
+  device: "cpu"
+  seed: 42
+  num_workers: 0
+  mixed_precision: false
+  log_level: "WARNING"
+
+paths:
+  data_root: "data"
+  raw_wsi_dir: "data/raw"
+  processed_dir: "data/processed"
+  patches_dir: "data/processed/patches"
+  embeddings_dir: "data/processed/embeddings"
+  features_dir: "data/processed/features"
+  faiss_index_dir: "data/processed/faiss_index"
+  metadata_dir: "data/metadata"
+  checkpoints_dir: "checkpoints"
+  results_dir: "results"
+  logs_dir: "logs"
+
+preprocessing:
+  patch_size: 64
+  magnification: 20
+  tissue_threshold: 0.3
+  overlap: 0
+  thumbnail_size: 256
+  segmentation:
+    method: "otsu"
+    median_blur_ksize: 7
+    morph_kernel_size: 5
+    min_contour_area: 100
+
+embedding:
+  model_name: "mock"
+  architecture: "vit_large_patch16_224"
+  embedding_dim: 1024
+  batch_size: 8
+  normalize: true
+  input_size: 224
+
+sequence_model:
+  d_model: 64
+  d_state: 4
+  d_conv: 2
+  expand_factor: 2
+  n_layers: 2
+  dropout: 0.0
+  region_size: 8
+  training:
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-2
+    epochs: 2
+    batch_size: 1
+    gradient_checkpointing: false
+    scheduler: "cosine"
+    warmup_epochs: 1
+
+retrieval:
+  index_type: "Flat"
+  n_list: 10
+  n_probe: 4
+  top_k: 3
+  similarity_metric: "cosine"
+  rerank: false
+
+entity_extraction:
+  llm_backend: "mock"
+  llm_model: "mock"
+  max_tokens: 512
+  temperature: 0.0
+  entity_types:
+    - tumor_type
+    - histological_grade
+  cross_validation: false
+
+explainability:
+  attention_heads: 2
+  mil_pooling: "gated_attention"
+  heatmap_resolution: 256
+  overlay_alpha: 0.4
+  colormap: "jet"
+  gaussian_sigma: 3.0
+
+report_generation:
+  fhir_version: "R4"
+  confidence_threshold: 0.7
+  language: "en"
+  include_evidence_links: true
+  style_divergence_target: 0.20
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  max_upload_size_mb: 100
+  cors_origins:
+    - "http://localhost:3000"

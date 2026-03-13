@@ -1,0 +1,48 @@
+﻿Collecting pytest
+  Downloading pytest-9.0.2-py3-none-any.whl.metadata (7.6 kB)
+Collecting pytest-cov
+  Downloading pytest_cov-7.0.0-py3-none-any.whl.metadata (31 kB)
+Requirement already satisfied: colorama>=0.4 in c:\users\emir\appdata\local\programs\python\python310\lib\site-packages (from pytest) (0.4.6)
+Requirement already satisfied: exceptiongroup>=1 in c:\users\emir\appdata\local\programs\python\python310\lib\site-packages (from pytest) (1.3.1)
+Collecting iniconfig>=1.0.1 (from pytest)
+  Downloading iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+Requirement already satisfied: packaging>=22 in c:\users\emir\appdata\local\programs\python\python310\lib\site-packages (from pytest) (24.0)
+Collecting pluggy<2,>=1.5 (from pytest)
+  Downloading pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+Requirement already satisfied: pygments>=2.7.2 in c:\users\emir\appdata\local\programs\python\python310\lib\site-packages (from pytest) (2.19.1)
+Collecting tomli>=1 (from pytest)
+  Downloading tomli-2.4.0-py3-none-any.whl.metadata (10 kB)
+Collecting coverage>=7.10.6 (from coverage[toml]>=7.10.6->pytest-cov)
+  Downloading coverage-7.13.4-cp310-cp310-win_amd64.whl.metadata (8.7 kB)
+Requirement already satisfied: typing-extensions>=4.6.0 in c:\users\emir\appdata\local\programs\python\python310\lib\site-packages (from exceptiongroup>=1->pytest) (4.15.0)
+Downloading pytest-9.0.2-py3-none-any.whl (374 kB)
+Downloading pluggy-1.6.0-py3-none-any.whl (20 kB)
+Downloading pytest_cov-7.0.0-py3-none-any.whl (22 kB)
+Downloading coverage-7.13.4-cp310-cp310-win_amd64.whl (222 kB)
+Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+Downloading tomli-2.4.0-py3-none-any.whl (14 kB)
+Installing collected packages: tomli, pluggy, iniconfig, coverage, pytest, pytest-cov
+
+Successfully installed coverage-7.13.4 iniconfig-2.3.0 pluggy-1.6.0 pytest-9.0.2 pytest-cov-7.0.0 tomli-2.4.0
+pip : 
+At line:1 char:1
++ pip install pytest py
+test-cov 2>&1 | Out-Fil
+e -Encoding utf8 C:\Use
+rs ...
++ ~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~
+    + CategoryInfo     
+         : NotSpecifi  
+  ed: (:String) [],    
+ RemoteException
+    + FullyQualifiedEr 
+   rorId : NativeComm  
+  andError
+ 
+[notice] A new release 
+of pip is available: 25
+.3 -> 26.0.1
+[notice] To update, run
+: python.exe -m pip ins
+tall --upgrade pip
