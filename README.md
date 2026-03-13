@@ -10,7 +10,7 @@ PathoLens analyses Whole Slide Images (WSIs) of breast cancer tissue and produce
 
 ## Architecture
 
-```
+```text
 WSI Input → Tissue Segmentation → Patch Extraction (256×256 @20×)
          → UNI Embedding (1024-dim)
          → Mamba Sequence Encoder (slide + region representations)
@@ -20,29 +20,43 @@ WSI Input → Tissue Segmentation → Patch Extraction (256×256 @20×)
              └→ CSAL Report Generation (FHIR DiagnosticReport)
 ```
 
-## Quick Start
+## Quick Start & Developer Excellence
+
+This repository is optimized for **Sustainable MLOps & AIOps**. You can install, test, format, and lint the entire codebase using simple `make` commands. 
 
 ```bash
-# Create virtual environment
+# 1. Create virtual environment
 python -m venv .venv
 .venv\Scripts\activate  # Windows
+# source .venv/bin/activate  # Linux/Mac
 
-# Install in development mode
-pip install -e ".[dev]"
+# 2. Install in development mode (installs pre-commit hooks)
+make install-dev
 
-# Verify installation
-python -c "from patholens import __version__; print(__version__)"
+# 3. Run the synthetic test suite (Zero Data / Zero GPU Required)
+make test
+
+# 4. Format and Lint code
+make check
 ```
 
-## Running the API
+> [!TIP]
+> **Testing Without Data:** The `make test` command runs a fully synthetic test harness. It mocks `OpenSlide`, the HuggingFace `UNI` model, and LLM backends so you can verify pipeline changes in < 5 seconds without downloading the 1.5TB TCGA dataset.
 
-```bash
-uvicorn patholens.api.main:app --reload --port 8000
-```
+## Managing the Production Pipeline
+
+For deploying the model locally or scaling up to the full TCGA-BRCA dataset, please read the **Production Scaling Blueprint**:
+👉 `documentation/production_training_plan.md`
+
+This document covers:
+1. Downloading TCGA-BRCA (~1.5 TB) and CAMELYON16.
+2. The 4-phase training pipeline (Preprocessing → Mamba → FAISS → LLM).
+3. MLOps (DVC + MLflow integration).
+4. AIOps Monitoring alerts for data drift and latency.
 
 ## Project Structure
 
-```
+```text
 src/patholens/
 ├── preprocessing/     WSI ingestion, tissue segmentation, patch extraction
 ├── embedding/         UNI feature extractor (frozen ViT-L/16)
@@ -55,7 +69,7 @@ src/patholens/
 └── api/               FastAPI web service
 ```
 
-## Hardware Requirements
+## Hardware Requirements (Production)
 
 - NVIDIA RTX 4090 (24GB VRAM) or equivalent
 - AMD Ryzen 9 7950X / similar CPU
@@ -63,5 +77,4 @@ src/patholens/
 - 2TB NVMe Gen4 SSD (for WSI storage)
 
 ## License
-
 Research use only.
