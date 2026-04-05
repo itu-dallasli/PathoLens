@@ -33,12 +33,8 @@ dependencies = [
     "scipy>=1.12.0",
     "scikit-learn>=1.4.0",
 
-    # Mamba / SSM
-    "mamba-ssm>=2.0.0",
-    "causal-conv1d>=1.2.0",
-
-    # Retrieval
-    "faiss-gpu>=1.7.4",
+    # Retrieval (CPU-safe default; install [gpu] extra for GPU-accelerated FAISS)
+    "faiss-cpu>=1.7.4",
 
     # NLP / LLM
     "huggingface-hub>=0.23.0",
@@ -63,6 +59,13 @@ dev = [
     "pytest-cov>=5.0.0",
     "ruff>=0.4.0",
     "pre-commit>=3.7.0",
+]
+# GPU extras: required for Mamba SSM (sequence encoding) and GPU-accelerated FAISS
+# Install with: pip install -e ".[gpu]"
+gpu = [
+    "mamba-ssm>=2.0.0",
+    "causal-conv1d>=1.2.0",
+    "faiss-gpu>=1.7.4",
 ]
 
 [tool.setuptools.packages.find]

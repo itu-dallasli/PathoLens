@@ -20,28 +20,49 @@ WSI Input → Tissue Segmentation → Patch Extraction (256×256 @20×)
              └→ CSAL Report Generation (FHIR DiagnosticReport)
 ```
 
-## Quick Start & Developer Excellence
+## Quick Start (No GPU Required)
 
-This repository is optimized for **Sustainable MLOps & AIOps**. You can install, test, format, and lint the entire codebase using simple `make` commands. 
+The test suite is fully synthetic — no GPU, no real WSI data, no model downloads needed.
 
 ```bash
 # 1. Create virtual environment
 python -m venv .venv
-.venv\Scripts\activate  # Windows
-# source .venv/bin/activate  # Linux/Mac
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # Linux/Mac
 
-# 2. Install in development mode (installs pre-commit hooks)
+# 2. Install system dependency (OpenSlide C library)
+#    Windows:  choco install openslide
+#    Ubuntu:   sudo apt-get install -y libopenslide-dev
+#    macOS:    brew install openslide
+
+# 3. Install in development mode (installs pre-commit hooks)
 make install-dev
 
-# 3. Run the synthetic test suite (Zero Data / Zero GPU Required)
+# 4. Run the synthetic test suite (< 30 seconds, CPU only)
 make test
 
-# 4. Format and Lint code
+# 5. Format, lint, and test in one shot (CI equivalent)
 make check
 ```
 
 > [!TIP]
-> **Testing Without Data:** The `make test` command runs a fully synthetic test harness. It mocks `OpenSlide`, the HuggingFace `UNI` model, and LLM backends so you can verify pipeline changes in < 5 seconds without downloading the 1.5TB TCGA dataset.
+> **Zero Data / Zero GPU:** All tests mock OpenSlide, the UNI model, and LLM backends. The full pipeline — including FHIR report generation and heatmap rendering — is verified using synthetic data in < 30 seconds on any laptop.
+
+### Running the API Server
+
+```bash
+uvicorn patholens.api.main:app --reload --port 8000
+# Server starts immediately; models are loaded lazily only when /api/analyze/ is called.
+curl http://localhost:8000/health   # → {"status": "ok"}
+```
+
+### GPU / Production Install
+
+To enable Mamba SSM sequence encoding and GPU-accelerated FAISS (requires CUDA):
+
+```bash
+pip install -e ".[dev,gpu]"
+```
 
 ## Managing the Production Pipeline
 
