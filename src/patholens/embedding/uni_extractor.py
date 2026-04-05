@@ -69,13 +69,22 @@ class UNIFeatureExtractor:
                 "pip install timm huggingface-hub"
             ) from e
 
-        # Attempt login (uses cached token or HF_TOKEN env var)
-        try:
-            login()
-        except Exception:
+        # Authenticate non-interactively: prefer HF_TOKEN env var, then cached token
+        import os
+        hf_token = os.environ.get("HF_TOKEN")
+        if not hf_token:
+            cached = Path.home() / ".cache" / "huggingface" / "token"
+            if cached.exists():
+                hf_token = cached.read_text().strip()
+        if hf_token:
+            try:
+                login(token=hf_token, add_to_git_credential=False)
+            except Exception:
+                log.warning("HuggingFace login failed. Model download may fail.")
+        else:
             log.warning(
-                "HuggingFace login skipped. Make sure HF_TOKEN is set or "
-                "you have run `huggingface-cli login`."
+                "No HuggingFace token found. Set HF_TOKEN or run "
+                "`huggingface-cli login`."
             )
 
         # Download model weights

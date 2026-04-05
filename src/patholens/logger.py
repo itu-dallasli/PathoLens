@@ -59,6 +59,7 @@ def setup_logging(level: int | str = _DEFAULT_LEVEL) -> None:
     root.setLevel(level)
 
     # ── Rich console handler ─────────────────────────────────
+    from rich.console import Console
     console_handler = RichHandler(
         level=level,
         show_time=True,
@@ -66,6 +67,7 @@ def setup_logging(level: int | str = _DEFAULT_LEVEL) -> None:
         markup=True,
         rich_tracebacks=True,
         tracebacks_show_locals=False,
+        console=Console(stderr=False, force_terminal=False, highlight=False),
     )
     console_handler.setFormatter(logging.Formatter(_FMT, datefmt=_DATE_FMT))
     root.addHandler(console_handler)

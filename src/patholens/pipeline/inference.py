@@ -196,7 +196,7 @@ class PathoLensPipeline:
             self._load_modules()
 
             # ─── Step 1: Preprocessing ───────────────────────
-            log.info("━━━ Step 1/7: Preprocessing %s ━━━", slide_id)
+            log.info("--- Step 1/7: Preprocessing %s ---", slide_id)
             from patholens.preprocessing.wsi_reader import WSIReader
 
             with WSIReader(wsi_path) as reader:
@@ -207,6 +207,17 @@ class PathoLensPipeline:
                 extraction = self._preprocessor.extract(reader, seg_result.mask)
                 result.num_patches = extraction.num_patches
                 wsi_dims = reader.dimensions
+
+                # Optional patch cap (useful for CPU test runs)
+                max_patches = getattr(self.config.preprocessing, "max_patches", None)
+                if max_patches and extraction.num_patches > max_patches:
+                    log.info(
+                        "Capping patches %d → %d (max_patches setting)",
+                        extraction.num_patches,
+                        max_patches,
+                    )
+                    extraction.coordinates = extraction.coordinates[:max_patches]
+                    result.num_patches = max_patches
 
                 # Save patch coords
                 self._patch_store.save(
@@ -221,7 +232,7 @@ class PathoLensPipeline:
                 )
 
                 # ─── Step 2: Embedding ───────────────────────
-                log.info("━━━ Step 2/7: Embedding %d patches ━━━", result.num_patches)
+                log.info("--- Step 2/7: Embedding %d patches ---", result.num_patches)
                 embeddings = self._batch_processor.process_slide(
                     slide_id=slide_id,
                     wsi_path=wsi_path,
@@ -231,14 +242,14 @@ class PathoLensPipeline:
                 )
 
             # ─── Step 3: Sequence encoding ───────────────────
-            log.info("━━━ Step 3/7: Slide encoding ━━━")
+            log.info("--- Step 3/7: Slide encoding ---")
             # NOTE: SlideEncoder must be loaded separately with trained weights
             # For now, we pass embeddings directly to downstream modules
             import torch
             emb_tensor = torch.from_numpy(embeddings).unsqueeze(0)  # (1, N, 1024)
 
             # ─── Step 4: Retrieval ───────────────────────────
-            log.info("━━━ Step 4/7: Case retrieval ━━━")
+            log.info("--- Step 4/7: Case retrieval ---")
             # Retriever will be connected once FAISS index is built
             retrieval_output = None
             if self._retriever is not None:
@@ -257,7 +268,7 @@ class PathoLensPipeline:
                 ]
 
             # ─── Step 5: Entity extraction ───────────────────
-            log.info("━━━ Step 5/7: Entity extraction ━━━")
+            log.info("--- Step 5/7: Entity extraction ---")
             reference_reports = [
                 {"slide_id": c["slide_id"], "report_text": c.get("report_text", "")}
                 for c in result.similar_cases
@@ -267,7 +278,7 @@ class PathoLensPipeline:
             validation = self._entity_validator.validate(diagnosis)
 
             # ─── Step 6: Explainability ──────────────────────
-            log.info("━━━ Step 6/7: Explainability ━━━")
+            log.info("--- Step 6/7: Explainability ---")
             # Compute attention weights
             attn_weights_np = np.ones(len(embeddings)) / len(embeddings)  # Uniform fallback
             if self._attention_model is not None:
@@ -305,7 +316,7 @@ class PathoLensPipeline:
             )
 
             # ─── Step 7: Report generation ───────────────────
-            log.info("━━━ Step 7/7: Report generation ━━━")
+            log.info("--- Step 7/7: Report generation ---")
             evidence_report = self._evidence_linker.link(
                 diagnosis=diagnosis,
                 entity_evidence=entity_evidence,

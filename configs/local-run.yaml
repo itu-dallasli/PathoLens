@@ -1,0 +1,13 @@
+# configs/local-run.yaml — CPU run with real WSI and real UNI embeddings
+# Usage: python run_real.py path/to/slide.tif
+system:
+  device: "cpu"
+  log_level: "INFO"
+
+embedding:
+  model_name: "MahmoodLab/UNI"   # downloads ~2.5 GB on first run, cached after
+  batch_size: 32                  # lower than default (256) to fit in CPU RAM
+
+preprocessing:
+  tissue_threshold: 0.8           # stricter filter → fewer patches for faster CPU test
+  max_patches: 500                # cap for CPU test run; remove for full slide
