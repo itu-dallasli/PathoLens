@@ -117,7 +117,7 @@ class EntityRegionMapper:
             results.append(evidence)
 
         log.info(
-            "Mapped %d entities → %d total regions",
+            "Mapped %d entities -> %d total regions",
             len(entities),
             sum(len(e.regions) for e in results),
         )

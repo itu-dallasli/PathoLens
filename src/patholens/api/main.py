@@ -119,7 +119,7 @@ async def upload_wsi(file: UploadFile):
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    log.info("Uploaded WSI: %s → %s", file.filename, dest)
+    log.info("Uploaded WSI: %s -> %s", file.filename, dest)
     return {"slide_id": slide_id, "path": str(dest), "size_mb": dest.stat().st_size / 1e6}
 
 

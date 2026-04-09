@@ -107,7 +107,7 @@ class FAISSIndexBuilder:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         faiss.write_index(index, str(path))
-        log.info("Saved FAISS index → %s", path)
+        log.info("Saved FAISS index -> %s", path)
 
     @staticmethod
     def load(path: str | Path) -> "faiss.Index":

@@ -69,7 +69,7 @@ class PatchStore:
                 f.attrs[k] = v
             f.attrs["num_patches"] = len(coordinates)
 
-        log.info("Saved %d patch coords → %s", len(coordinates), out)
+        log.info("Saved %d patch coords -> %s", len(coordinates), out)
         return out
 
     # ── Read ─────────────────────────────────────────────────

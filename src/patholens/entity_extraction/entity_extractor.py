@@ -284,7 +284,7 @@ class KARGEntityExtractor:
                 )
 
         log.info(
-            "Merged %d extractions → %d entities  |  overall_conf=%.2f",
+            "Merged %d extractions -> %d entities  |  overall_conf=%.2f",
             n,
             len(diagnosis.all_entities),
             diagnosis.overall_confidence,

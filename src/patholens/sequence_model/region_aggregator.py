@@ -36,20 +36,31 @@ class RegionAggregator(nn.Module):
             nn.Linear(128, 1),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, return_attention: bool = False
+    ):
         """
         Parameters
         ----------
         x : (B, L, D)
             Patch-level features.
+        return_attention : bool
+            If True, also returns the within-region attention weights and the
+            number of real (non-padding) patches in the trailing region so
+            callers can flatten back to the original patch order.
 
         Returns
         -------
         (B, R, D)
             Region-level features where ``R = ceil(L / region_size)``.
+            If ``return_attention`` is True, returns
+            ``(pooled, intra_attn, valid_in_last)`` where ``intra_attn`` has
+            shape ``(B, R, rs)`` and ``valid_in_last`` is the number of real
+            patches in the last region (``rs`` if no padding).
         """
         B, L, D = x.shape
         rs = self.region_size
+        orig_L = L
 
         # Pad sequence so it divides evenly into regions
         remainder = L % rs
@@ -69,4 +80,7 @@ class RegionAggregator(nn.Module):
 
         # Weighted sum: (B, R, D)
         pooled = (attn_weights * x).sum(dim=2)
+        if return_attention:
+            valid_in_last = orig_L - rs * (n_regions - 1) if n_regions > 0 else 0
+            return pooled, attn_weights.squeeze(-1), valid_in_last
         return pooled

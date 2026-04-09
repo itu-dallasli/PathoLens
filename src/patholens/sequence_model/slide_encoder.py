@@ -30,6 +30,9 @@ class SlideEncoderOutput:
     region_reprs: torch.Tensor        # (B, R, d_model)
     patch_features: torch.Tensor      # (B, L, d_model) — contextualised
     classification_logits: Optional[torch.Tensor] = None  # (B, n_classes)
+    region_attention: Optional[torch.Tensor] = None       # (B, R)   slide-level
+    intra_region_attention: Optional[torch.Tensor] = None # (B, R, rs) within-region
+    valid_in_last_region: Optional[int] = None            # real patches in final region
 
 
 class SlideEncoder(nn.Module):
@@ -64,10 +67,12 @@ class SlideEncoder(nn.Module):
         d_conv: int = 4,
         expand: int = 2,
         dropout: float = 0.1,
+        backbone: str = "mamba",
     ):
         super().__init__()
         self.d_model = d_model
         self.n_classes = n_classes
+        self.backbone = backbone
 
         # Stage 1: project patches and contextualise with a lightweight encoder
         self.patch_encoder = MambaEncoder(
@@ -78,6 +83,7 @@ class SlideEncoder(nn.Module):
             d_conv=d_conv,
             expand=expand,
             dropout=dropout,
+            backbone=backbone,
         )
 
         # Region aggregation
@@ -95,6 +101,7 @@ class SlideEncoder(nn.Module):
             d_conv=d_conv,
             expand=expand,
             dropout=dropout,
+            backbone=backbone,
         )
 
         # Slide-level attention pooling
@@ -128,8 +135,10 @@ class SlideEncoder(nn.Module):
         # Stage 1: patch-level Mamba
         patch_features = self.patch_encoder(patch_embeddings)  # (B, N, d)
 
-        # Aggregate into regions
-        region_reprs = self.region_aggregator(patch_features)  # (B, R, d)
+        # Aggregate into regions (also expose intra-region attention)
+        region_reprs, intra_attn, valid_in_last = self.region_aggregator(
+            patch_features, return_attention=True
+        )                                                       # (B, R, d), (B, R, rs)
 
         # Stage 2: region-level Mamba
         region_reprs = self.region_encoder(region_reprs)  # (B, R, d)
@@ -149,4 +158,7 @@ class SlideEncoder(nn.Module):
             region_reprs=region_reprs,
             patch_features=patch_features,
             classification_logits=logits,
+            region_attention=attn_weights.squeeze(-1),  # (B, R)
+            intra_region_attention=intra_attn,          # (B, R, rs)
+            valid_in_last_region=valid_in_last,
         )

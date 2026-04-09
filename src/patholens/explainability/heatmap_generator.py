@@ -150,4 +150,4 @@ class HeatmapGenerator:
     ) -> None:
         """Save heatmap image to disk."""
         heatmap.save(path)
-        log.info("Saved heatmap → %s", path)
+        log.info("Saved heatmap -> %s", path)

@@ -125,6 +125,12 @@ class PathoLensPipeline:
             batch_size=emb.batch_size,
         )
 
+        # Slide encoder (hierarchical Mamba MIL) — optional, loaded from
+        # checkpoint if one is configured / present on disk. Falls back to
+        # ``None`` so the pipeline still runs untrained (Step 3 just lifts
+        # raw UNI features into a (1, N, 1024) tensor).
+        self._slide_encoder = self._maybe_load_slide_encoder()
+
         # Explainability
         exp = cfg.explainability
         self._attention_model = GatedAttentionMIL(
@@ -161,6 +167,66 @@ class PathoLensPipeline:
 
         self._modules_loaded = True
         log.info("All pipeline modules loaded.")
+
+    # ── Slide encoder loading ────────────────────────────────
+    def _maybe_load_slide_encoder(self):
+        """
+        Try to load a trained :class:`SlideEncoder` checkpoint.
+
+        Looks for an explicit path on ``config.sequence_model.checkpoint_path``;
+        otherwise falls back to ``checkpoints/slide_encoder_final.pt``.
+        Returns ``None`` (and logs) if no checkpoint is available — the rest
+        of the pipeline degrades gracefully in that case.
+        """
+        import torch
+
+        from patholens.sequence_model.slide_encoder import SlideEncoder
+
+        ckpt_path = getattr(
+            self.config.sequence_model, "checkpoint_path", None
+        )
+        if ckpt_path:
+            ckpt_path = Path(ckpt_path)
+        else:
+            ckpt_path = Path("checkpoints") / "slide_encoder_final.pt"
+
+        if not ckpt_path.exists():
+            log.info(
+                "No SlideEncoder checkpoint at %s -- Step 3 will pass raw "
+                "UNI features through (untrained mode).",
+                ckpt_path,
+            )
+            return None
+
+        try:
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            mcfg = ckpt.get("config", {})
+            model = SlideEncoder(
+                input_dim=mcfg.get("input_dim", 1024),
+                d_model=mcfg.get("d_model", self.config.sequence_model.d_model),
+                n_layers=mcfg.get("n_layers", 4),
+                region_size=mcfg.get("region_size", 64),
+                n_classes=mcfg.get("n_classes", 2),
+                dropout=mcfg.get("dropout", 0.1),
+                backbone=mcfg.get("backbone", "mamba"),
+            )
+            model.load_state_dict(ckpt["model_state_dict"])
+            model.eval()
+            log.info(
+                "Loaded SlideEncoder from %s  (best_val_loss=%.4f, "
+                "best_val_acc=%.3f)",
+                ckpt_path,
+                ckpt.get("best_val_loss", float("nan")),
+                ckpt.get("best_val_acc", float("nan")),
+            )
+            return model
+        except Exception as e:
+            log.warning(
+                "Failed to load SlideEncoder from %s: %s -- continuing untrained",
+                ckpt_path,
+                e,
+            )
+            return None
 
     # ── Main entry point ────────────────────────────────────
     def run(
@@ -208,15 +274,21 @@ class PathoLensPipeline:
                 result.num_patches = extraction.num_patches
                 wsi_dims = reader.dimensions
 
-                # Optional patch cap (useful for CPU test runs)
+                # Optional patch cap (useful for CPU test runs).
+                # Random sample (seeded) instead of first-N to avoid top-left bias.
                 max_patches = getattr(self.config.preprocessing, "max_patches", None)
                 if max_patches and extraction.num_patches > max_patches:
                     log.info(
-                        "Capping patches %d → %d (max_patches setting)",
+                        "Capping patches %d -> %d (random sample, seed=0)",
                         extraction.num_patches,
                         max_patches,
                     )
-                    extraction.coordinates = extraction.coordinates[:max_patches]
+                    rng = np.random.default_rng(0)
+                    idx = rng.choice(
+                        extraction.num_patches, size=max_patches, replace=False
+                    )
+                    idx.sort()
+                    extraction.coordinates = extraction.coordinates[idx]
                     result.num_patches = max_patches
 
                 # Save patch coords
@@ -243,10 +315,42 @@ class PathoLensPipeline:
 
             # ─── Step 3: Sequence encoding ───────────────────
             log.info("--- Step 3/7: Slide encoding ---")
-            # NOTE: SlideEncoder must be loaded separately with trained weights
-            # For now, we pass embeddings directly to downstream modules
             import torch
-            emb_tensor = torch.from_numpy(embeddings).unsqueeze(0)  # (1, N, 1024)
+
+            emb_tensor = torch.from_numpy(embeddings).unsqueeze(0).float()  # (1, N, 1024)
+            slide_output = None
+            slide_attn_per_patch: Optional[np.ndarray] = None
+            slide_logits_np: Optional[np.ndarray] = None
+
+            if self._slide_encoder is not None:
+                with torch.no_grad():
+                    slide_output = self._slide_encoder(emb_tensor)
+                # Per-patch importance = region_attn[r] * intra_attn[r, p]
+                # then flattened back to length N (trim trailing padding).
+                if (
+                    slide_output.region_attention is not None
+                    and slide_output.intra_region_attention is not None
+                ):
+                    region_attn = slide_output.region_attention[0].cpu().numpy()  # (R,)
+                    intra_attn = slide_output.intra_region_attention[0].cpu().numpy()  # (R, rs)
+                    R, rs = intra_attn.shape
+                    combined = intra_attn * region_attn[:, None]               # (R, rs)
+                    flat = combined.reshape(-1)                                 # (R*rs,)
+                    n_real = len(embeddings)
+                    slide_attn_per_patch = flat[:n_real].astype(np.float32)
+                    # Normalise to a probability distribution over patches
+                    s = slide_attn_per_patch.sum()
+                    if s > 0:
+                        slide_attn_per_patch = slide_attn_per_patch / s
+                if slide_output.classification_logits is not None:
+                    slide_logits_np = (
+                        slide_output.classification_logits[0].cpu().numpy()
+                    )
+                    log.info(
+                        "SlideEncoder logits: %s  (argmax=%d)",
+                        np.array2string(slide_logits_np, precision=3),
+                        int(np.argmax(slide_logits_np)),
+                    )
 
             # ─── Step 4: Retrieval ───────────────────────────
             log.info("--- Step 4/7: Case retrieval ---")
@@ -279,23 +383,32 @@ class PathoLensPipeline:
 
             # ─── Step 6: Explainability ──────────────────────
             log.info("--- Step 6/7: Explainability ---")
-            # Compute attention weights
-            attn_weights_np = np.ones(len(embeddings)) / len(embeddings)  # Uniform fallback
-            if self._attention_model is not None:
-                try:
-                    import torch
-                    with torch.no_grad():
-                        patch_feat = torch.from_numpy(embeddings).unsqueeze(0).float()
-                        # Project to model dim if needed
-                        if patch_feat.shape[-1] != self.config.sequence_model.d_model:
-                            proj = torch.nn.Linear(patch_feat.shape[-1], self.config.sequence_model.d_model)
-                            patch_feat = proj(patch_feat)
-                        attn, _ = self._attention_model(patch_feat)
-                        attn_weights_np = attn.squeeze().numpy()
-                        if attn_weights_np.ndim > 1:
-                            attn_weights_np = attn_weights_np.mean(axis=-1)
-                except Exception as e:
-                    log.warning("Attention model failed, using uniform: %s", e)
+            # Attention source priority:
+            #   1. SlideEncoder (trained Mamba MIL) — best quality
+            #   2. GatedAttentionMIL — legacy fallback (random weights until trained)
+            #   3. Uniform — final fallback
+            attn_weights_np: np.ndarray
+            if slide_attn_per_patch is not None:
+                attn_weights_np = slide_attn_per_patch
+                log.info("Using SlideEncoder attention weights (%d patches)", len(attn_weights_np))
+            else:
+                attn_weights_np = np.ones(len(embeddings), dtype=np.float32) / len(embeddings)
+                if self._attention_model is not None:
+                    try:
+                        with torch.no_grad():
+                            patch_feat = torch.from_numpy(embeddings).unsqueeze(0).float()
+                            if patch_feat.shape[-1] != self.config.sequence_model.d_model:
+                                proj = torch.nn.Linear(
+                                    patch_feat.shape[-1],
+                                    self.config.sequence_model.d_model,
+                                )
+                                patch_feat = proj(patch_feat)
+                            attn, _ = self._attention_model(patch_feat)
+                            attn_weights_np = attn.squeeze().numpy()
+                            if attn_weights_np.ndim > 1:
+                                attn_weights_np = attn_weights_np.mean(axis=-1)
+                    except Exception as e:
+                        log.warning("Attention model failed, using uniform: %s", e)
 
             heatmap_img, raw_attn = self._heatmap_gen.generate(
                 wsi_dimensions=wsi_dims,
@@ -307,6 +420,11 @@ class PathoLensPipeline:
             heatmap_path = str(output_dir / "heatmap.png")
             self._heatmap_gen.save(heatmap_img, heatmap_path)
             result.heatmap_path = heatmap_path
+
+            # Persist raw (pre-colormap) attention map so downstream tools
+            # (eval harness, threshold sweeps) can work with exact values
+            # instead of reverse-engineering the lossy overlay PNG.
+            np.save(output_dir / "heatmap_raw.npy", raw_attn.astype(np.float32))
 
             # Entity-region mapping
             entity_evidence = self._region_mapper.map(

@@ -70,7 +70,7 @@ class SlideTrainer:
             self.model.parameters(), lr=self.lr, weight_decay=self.wd
         )
 
-        # LR schedule: linear warmup → cosine decay
+        # LR schedule: linear warmup -> cosine decay
         warmup = LinearLR(
             self.optimizer, start_factor=0.01, total_iters=self.warmup_epochs
         )
@@ -227,7 +227,7 @@ class SlideTrainer:
             },
             path,
         )
-        log.info("Checkpoint saved → %s", path)
+        log.info("Checkpoint saved -> %s", path)
 
     def load_checkpoint(self, path: str | Path):
         """Load a saved checkpoint to resume training."""

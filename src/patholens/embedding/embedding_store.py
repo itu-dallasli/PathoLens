@@ -75,7 +75,7 @@ class EmbeddingStore:
                 f.attrs[k] = v
             f.attrs["num_patches"] = len(embeddings)
 
-        log.info("Saved %d embeddings → %s", len(embeddings), out)
+        log.info("Saved %d embeddings -> %s", len(embeddings), out)
         return out
 
     # ── Read ─────────────────────────────────────────────────
