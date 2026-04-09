@@ -141,7 +141,7 @@ def _run_pipeline_with_mocks(config, wsi_path, tmp_dir, slide_id="test"):
     with patch("patholens.preprocessing.wsi_reader.WSIReader", side_effect=lambda p: FakeWSIReader(p)):
         pipeline = PathoLensPipeline(config=config)
         pipeline._load_modules()
-        pipeline._entity_extractor._call_llm = MagicMock(return_value=MOCK_LLM_RESPONSE)
+        # LLM entity extraction removed; pipeline now uses classifier-based diagnosis.
         result = pipeline.run(wsi_path=wsi_path, slide_id=slide_id, output_dir=tmp_dir / "results")
     return result
 

@@ -64,8 +64,6 @@ class PathoLensPipeline:
         self._batch_processor = None
         self._slide_encoder = None
         self._retriever = None
-        self._entity_extractor = None
-        self._entity_validator = None
         self._attention_model = None
         self._heatmap_gen = None
         self._region_mapper = None
@@ -89,8 +87,6 @@ class PathoLensPipeline:
         from patholens.explainability.attention_mil import GatedAttentionMIL
         from patholens.explainability.heatmap_generator import HeatmapGenerator
         from patholens.explainability.entity_region_mapper import EntityRegionMapper
-        from patholens.entity_extraction.entity_extractor import KARGEntityExtractor
-        from patholens.entity_extraction.validator import EntityValidator
         from patholens.report_generation.fhir_builder import FHIRReportBuilder
         from patholens.report_generation.evidence_linker import EvidenceLinker
 
@@ -125,11 +121,14 @@ class PathoLensPipeline:
             batch_size=emb.batch_size,
         )
 
-        # Slide encoder (hierarchical Mamba MIL) — optional, loaded from
-        # checkpoint if one is configured / present on disk. Falls back to
-        # ``None`` so the pipeline still runs untrained (Step 3 just lifts
-        # raw UNI features into a (1, N, 1024) tensor).
+        # Slide encoder (hierarchical Mamba/Attention MIL) — optional, loaded
+        # from checkpoint if one is present on disk.  Falls back to None so
+        # the pipeline degrades gracefully when untrained.
         self._slide_encoder = self._maybe_load_slide_encoder()
+
+        # FAISS retrieval index — optional, loaded from data/faiss_index/
+        # if it exists (built by scripts/build_faiss_index.py after training).
+        self._retriever = self._maybe_load_retriever()
 
         # Explainability
         exp = cfg.explainability
@@ -146,16 +145,6 @@ class PathoLensPipeline:
         self._region_mapper = EntityRegionMapper(
             patch_size=pp.patch_size,
         )
-
-        # Entity extraction
-        ee = cfg.entity_extraction
-        self._entity_extractor = KARGEntityExtractor(
-            llm_backend=ee.llm_backend,
-            llm_model=ee.llm_model,
-            temperature=ee.temperature,
-            max_tokens=ee.max_tokens,
-        )
-        self._entity_validator = EntityValidator()
 
         # Report
         rg = cfg.report_generation
@@ -226,6 +215,77 @@ class PathoLensPipeline:
                 ckpt_path,
                 e,
             )
+            return None
+
+    def _maybe_load_retriever(self):
+        """
+        Try to load the FAISS slide retrieval index built by
+        ``scripts/build_faiss_index.py``.
+
+        Returns a callable ``search(slide_repr, slide_id, top_k)`` that
+        returns a list of dicts ``{slide_id, similarity_score, label}``,
+        or ``None`` if the index does not exist yet.
+        """
+        import json as _json
+
+        try:
+            import faiss as _faiss
+        except ImportError:
+            log.info("faiss not available; retrieval step will be skipped.")
+            return None
+
+        index_dir = Path(
+            getattr(self.config, "faiss_index_dir", "data/faiss_index")
+        )
+        index_path = index_dir / "slide_index.faiss"
+        meta_path = index_dir / "metadata.json"
+
+        if not index_path.exists():
+            log.info(
+                "No FAISS index at %s -- retrieval step will be skipped. "
+                "Run scripts/build_faiss_index.py after training.",
+                index_path,
+            )
+            return None
+
+        try:
+            index = _faiss.read_index(str(index_path))
+            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+            id_map = {int(k): v for k, v in meta["id_map"].items()}
+            slides_meta = meta["slides"]
+            top_k_default = meta.get("top_k", 5)
+
+            def _search(slide_repr: np.ndarray, slide_id: str, top_k: int = top_k_default):
+                vec = slide_repr.reshape(1, -1).astype(np.float32)
+                _faiss.normalize_L2(vec)
+                scores, indices = index.search(vec, top_k + 1)  # +1 to allow self-skip
+                results = []
+                for score, idx in zip(scores[0], indices[0]):
+                    if idx < 0:
+                        continue
+                    sid = id_map.get(int(idx), f"unknown_{idx}")
+                    if sid == slide_id:
+                        continue
+                    smeta = slides_meta.get(sid, {})
+                    results.append({
+                        "slide_id": sid,
+                        "similarity_score": float(score),
+                        "label": smeta.get("label", -1),
+                        "label_name": smeta.get("label_name", "unknown"),
+                    })
+                    if len(results) >= top_k:
+                        break
+                return results
+
+            log.info(
+                "Loaded FAISS index from %s  (%d slides)",
+                index_path,
+                meta["n_slides"],
+            )
+            return _search
+
+        except Exception as e:
+            log.warning("Failed to load FAISS index: %s -- retrieval skipped", e)
             return None
 
     # ── Main entry point ────────────────────────────────────
@@ -352,34 +412,68 @@ class PathoLensPipeline:
                         int(np.argmax(slide_logits_np)),
                     )
 
-            # ─── Step 4: Retrieval ───────────────────────────
+            # ─── Step 4: Visual similarity retrieval ────────
             log.info("--- Step 4/7: Case retrieval ---")
-            # Retriever will be connected once FAISS index is built
-            retrieval_output = None
-            if self._retriever is not None:
-                slide_repr = embeddings.mean(axis=0)  # Simple average as fallback
-                retrieval_output = self._retriever.search(
-                    query_slide_repr=slide_repr,
-                    query_slide_id=slide_id,
-                )
-                result.similar_cases = [
-                    {
-                        "slide_id": r.slide_id,
-                        "similarity_score": r.similarity_score,
-                        "report_text": r.report_text,
-                    }
-                    for r in retrieval_output.results
-                ]
+            if self._retriever is not None and slide_output is not None:
+                # Use the trained slide_repr from the encoder — much better
+                # than mean-pooling raw UNI features.
+                slide_repr_np = slide_output.slide_repr[0].cpu().numpy()
+                result.similar_cases = self._retriever(slide_repr_np, slide_id)
+                if result.similar_cases:
+                    log.info(
+                        "Retrieved %d similar cases: %s",
+                        len(result.similar_cases),
+                        [(c["slide_id"], f"{c['similarity_score']:.3f}")
+                         for c in result.similar_cases],
+                    )
+            else:
+                log.info("Retrieval skipped (no index or encoder not loaded).")
 
-            # ─── Step 5: Entity extraction ───────────────────
-            log.info("--- Step 5/7: Entity extraction ---")
-            reference_reports = [
-                {"slide_id": c["slide_id"], "report_text": c.get("report_text", "")}
-                for c in result.similar_cases
-                if c.get("report_text")
-            ]
-            diagnosis = self._entity_extractor.extract(reference_reports)
-            validation = self._entity_validator.validate(diagnosis)
+            # ─── Step 5: Classifier-based diagnosis ──────────
+            # Diagnosis is derived directly from the SlideEncoder classifier
+            # output rather than LLM extraction over retrieved reports.
+            # This keeps the pipeline deterministic and removes the LLM
+            # dependency. Retrieved cases provide supporting evidence only.
+            log.info("--- Step 5/7: Diagnosis from classifier ---")
+            from patholens.entity_extraction.entity_schema import (
+                ClinicalEntity, StructuredDiagnosis
+            )
+            import torch as _torch
+
+            if slide_logits_np is not None:
+                # SlideEncoder trained with n_classes=2 (normal=0, tumor=1)
+                probs = _torch.softmax(
+                    _torch.from_numpy(slide_logits_np), dim=0
+                ).numpy()
+                tumor_prob = float(probs[1])
+                is_tumor = tumor_prob >= 0.5
+
+                # Corroborate with retrieved cases (majority vote)
+                if result.similar_cases:
+                    retrieved_labels = [c["label"] for c in result.similar_cases]
+                    retrieved_tumor_frac = sum(retrieved_labels) / len(retrieved_labels)
+                    # Blend: 70% classifier, 30% retrieval majority
+                    tumor_prob = 0.7 * tumor_prob + 0.3 * retrieved_tumor_frac
+                    is_tumor = tumor_prob >= 0.5
+
+                diagnosis = StructuredDiagnosis(
+                    tumor_type=ClinicalEntity(
+                        entity_type="tumor_type",
+                        value="Carcinoma" if is_tumor else "Benign",
+                        confidence=tumor_prob if is_tumor else (1.0 - tumor_prob),
+                        source_report_id=slide_id,
+                        source_text_span=(
+                            f"SlideEncoder tumor_prob={tumor_prob:.3f}"
+                            + (
+                                f"  retrieved_support={retrieved_tumor_frac:.2f}"
+                                if result.similar_cases else ""
+                            )
+                        ),
+                    )
+                )
+            else:
+                # No trained encoder — empty diagnosis
+                diagnosis = StructuredDiagnosis()
 
             # ─── Step 6: Explainability ──────────────────────
             log.info("--- Step 6/7: Explainability ---")
@@ -447,6 +541,7 @@ class PathoLensPipeline:
                 evidence=entity_evidence,
                 slide_id=slide_id,
                 heatmap_path=heatmap_path,
+                retrieved_cases=result.similar_cases,
             )
             result.fhir_report = fhir_report
             result.fhir_json = self._report_builder.to_json(fhir_report)

@@ -1,8 +1,10 @@
 """
 FHIR Report Builder — HL7 FHIR R4 DiagnosticReport generation.
 
-Assembles a FHIR-compliant DiagnosticReport from structured clinical
-entities and evidence links produced by KARG and RAAF.
+Assembles a FHIR-compliant DiagnosticReport from:
+- Classifier-based diagnosis (tumor probability from SlideEncoder)
+- Attention heatmap (RAAF explainability)
+- Retrieved similar training cases (CMEA visual similarity retrieval)
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ class FHIRReportBuilder:
         evidence: List[EntityEvidence],
         slide_id: str = "",
         heatmap_path: Optional[str] = None,
+        retrieved_cases: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Build a complete FHIR R4 DiagnosticReport.
@@ -52,9 +55,15 @@ class FHIRReportBuilder:
         Parameters
         ----------
         diagnosis : StructuredDiagnosis
+            Classifier-derived diagnosis.
         evidence : list[EntityEvidence]
+            Per-entity visual evidence from RAAF.
         slide_id : str
         heatmap_path : str, optional
+            Path to saved attention heatmap PNG.
+        retrieved_cases : list[dict], optional
+            Top-k similar cases from CMEA retrieval, each with keys
+            ``slide_id``, ``similarity_score``, ``label``, ``label_name``.
 
         Returns
         -------
@@ -138,7 +147,7 @@ class FHIRReportBuilder:
         if heatmap_path:
             report["media"] = [
                 {
-                    "comment": "Attention heatmap overlay",
+                    "comment": "Attention heatmap overlay (RAAF explainability)",
                     "link": {"reference": f"Media/{heatmap_path}"},
                 }
             ]
@@ -149,6 +158,32 @@ class FHIRReportBuilder:
                 "url": "http://patholens.itu.edu.tr/fhir/StructureDefinition/evidence-details",
                 "valueString": json.dumps(evidence_refs),
             })
+
+        # Attach retrieved similar cases (CMEA visual retrieval)
+        if retrieved_cases:
+            report["extension"].append({
+                "url": "http://patholens.itu.edu.tr/fhir/StructureDefinition/retrieved-cases",
+                "valueString": json.dumps([
+                    {
+                        "slide_id": c["slide_id"],
+                        "similarity_score": round(c["similarity_score"], 4),
+                        "label": c.get("label_name", "unknown"),
+                    }
+                    for c in retrieved_cases
+                ]),
+            })
+            # Also as FHIR derivedFrom references
+            report["derivedFrom"] = [
+                {
+                    "reference": f"ImagingStudy/{c['slide_id']}",
+                    "display": (
+                        f"Similar case {c['slide_id']} "
+                        f"(similarity={c['similarity_score']:.3f}, "
+                        f"label={c.get('label_name', '?')})"
+                    ),
+                }
+                for c in retrieved_cases
+            ]
 
         log.info(
             "Built FHIR DiagnosticReport  |  id=%s  status=%s  "

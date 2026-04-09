@@ -1,6 +1,6 @@
 # PathoLens — Pipeline How-To
 
-> End-to-end instructions: data prep → train → inference → eval.
+> End-to-end instructions: data prep -> train -> inference -> eval.
 > All commands assume the repo root as CWD and `pip install -e ".[dev]"` already done.
 
 ---
@@ -8,13 +8,13 @@
 ## 0. Prerequisites
 
 ```bash
-pip install -e ".[dev]"          # installs faiss-cpu, openslide-bin, etc.
+pip install -e ".[dev]"
 # HuggingFace token for UNI (MahmoodLab/UNI is gated)
 # Put token in ~/.cache/huggingface/token  OR  set HF_TOKEN env var
 ```
 
-**Windows note**: the console codec is CP1254. Always redirect output to a file
-or set `PYTHONIOENCODING=utf-8` if you see UnicodeEncodeError in the terminal.
+**Windows note**: set `PYTHONIOENCODING=utf-8` or redirect to a file to avoid
+CP1254 encoding errors in the terminal.
 
 ---
 
@@ -27,22 +27,22 @@ python scripts/download_camelyon16.py \
     --budget-gb 300
 ```
 
-Expected layout after download:
+Expected layout:
 
 ```
 X:/Bitirme_Data/
-  tumor/          # tumor_001.tif ... tumor_111.tif
-  normal/         # normal_001.tif ... normal_010.tif
-  annotations/    # *.xml  (training set only)
-  masks/          # *_mask.tif  (official pixel-level labels)
+  tumor/          # tumor_001.tif ... tumor_111.tif  (111 slides)
+  normal/         # normal_001.tif ... normal_010.tif (10 slides)
+  annotations/    # tumor_*.xml  (ASAP polygon format)
+  masks/          # tumor_*_mask.tif  (official pixel labels: 2=tumor, 1=tissue, 0=bg)
 ```
 
 ---
 
-## 2. Build embedding cache
+## 2. Build UNI embedding cache
 
-Runs UNI (ViT-L/16) on every slide once and saves `(embeddings, coords, label)`
-to disk. **Required before training.** Skips slides already cached (resumable).
+Runs UNI (ViT-L/16) on every slide once and saves `(embeddings, coords, label)` as NPZ.
+**Required before training.** Resumable — skips already-cached slides.
 
 ```bash
 PYTHONPATH=src python scripts/build_embedding_cache.py \
@@ -52,26 +52,20 @@ PYTHONPATH=src python scripts/build_embedding_cache.py \
     --out data/processed/slide_cache
 ```
 
-Key flags:
-
 | Flag | Default | Notes |
 |---|---|---|
-| `--max-patches` | 4000 | 500 recommended for CPU (~2 min/slide) |
-| `--tumor-limit N` | all | cap tumor slides for quick tests |
-| `--normal-limit N` | all | |
-| `--overwrite` | off | re-process already-cached slides |
-| `--list` | off | dry-run: print job list, no processing |
+| `--max-patches` | 4000 | 500 recommended on CPU (~2 min/slide) |
+| `--tumor-limit N` | all | cap for quick tests |
+| `--overwrite` | off | re-process cached slides |
+| `--list` | off | dry-run only |
 
-Estimated time on CPU: ~2 min/slide at 500 patches → ~4 h for 121 slides.
-
-Progress log: `data/cache_build.log`
+Estimated time: ~2 min/slide at 500 patches -> ~4 h for 121 slides on CPU.
 
 ---
 
-## 3. Train the Slide Encoder
+## 3. Train SlideEncoder
 
-Trains the hierarchical Mamba MIL on cached embeddings.
-Stratified 80/20 train/val split, CE loss, cosine LR with warmup.
+Stratified 80/20 train/val split, CE loss, cosine LR + warmup.
 
 ```bash
 PYTHONPATH=src python scripts/train_slide_encoder.py \
@@ -79,39 +73,58 @@ PYTHONPATH=src python scripts/train_slide_encoder.py \
     --epochs 20 \
     --d-model 256 \
     --n-layers 4
-```
 
-Key flags:
+# To use Transformer attention instead of Mamba:
+PYTHONPATH=src python scripts/train_slide_encoder.py \
+    --epochs 20 --backbone attention
+```
 
 | Flag | Default | Notes |
 |---|---|---|
+| `--backbone` | mamba | `mamba` (O(N) SSM) or `attention` (O(N^2) MHSA) |
 | `--epochs` | 20 | ~4 min/epoch on CPU |
 | `--d-model` | 256 | internal feature dim |
-| `--n-layers` | 4 | Mamba layers (2 patch + 2 region) |
+| `--n-layers` | 4 | 2 patch-level + 2 region-level |
 | `--region-size` | 64 | patches per region |
-| `--lr` | 2e-4 | AdamW learning rate |
-| `--no-amp` | off | disable mixed precision (auto on CPU) |
+| `--lr` | 2e-4 | |
 
-Outputs:
+Outputs (auto-loaded by inference):
 
 ```
 checkpoints/
-  slide_encoder_final.pt        # final weights + config dict + history
-  slide_encoder_history.json    # per-epoch loss / acc
-  slide_encoder_epoch020.pt     # periodic checkpoints every 10 epochs
-```
-
-The inference pipeline auto-loads `checkpoints/slide_encoder_final.pt` if it exists.
-To point to a different checkpoint, add to your config YAML:
-
-```yaml
-sequence_model:
-  checkpoint_path: checkpoints/slide_encoder_final.pt
+  slide_encoder_final.pt        # weights + config + history
+  slide_encoder_history.json    # per-epoch loss/acc
 ```
 
 ---
 
-## 4. Run inference on a single WSI
+## 4. Build FAISS retrieval index
+
+Runs the trained SlideEncoder on every cached slide to produce 256-dim
+`slide_repr` vectors, then builds a flat cosine FAISS index.
+
+```bash
+PYTHONPATH=src python scripts/build_faiss_index.py \
+    --cache-dir  data/processed/slide_cache \
+    --checkpoint checkpoints/slide_encoder_final.pt \
+    --out        data/faiss_index
+```
+
+Output:
+
+```
+data/faiss_index/
+  slide_index.faiss     FAISS flat IP index (cosine after L2 normalisation)
+  metadata.json         {slide_id -> {label, label_name, int_id, npz_path}}
+```
+
+Estimated time: ~5 min for 121 slides.
+
+---
+
+## 5. Run inference on a single WSI
+
+Both the checkpoint and the FAISS index are auto-loaded if present.
 
 ```bash
 PYTHONPATH=src python run_real.py X:/Bitirme_Data/tumor/tumor_071.tif
@@ -120,70 +133,47 @@ PYTHONPATH=src python run_real.py X:/Bitirme_Data/tumor/tumor_071.tif
 Or via the API:
 
 ```bash
-uvicorn patholens.api.main:app --reload   # http://localhost:8000/docs
+uvicorn patholens.api.main:app --reload
+# POST /api/analyze/ with the WSI file
 ```
 
-Results written to `results/<slide_id>/`:
+Output in `results/<slide_id>/`:
 
 ```
 results/tumor_071/
-  heatmap.png              # attention overlay on thumbnail
-  heatmap_raw.npy          # raw float32 attention map (for threshold sweeps)
-  diagnostic_report.json   # FHIR R4 DiagnosticReport
+  heatmap.png              attention overlay on thumbnail
+  heatmap_raw.npy          raw float32 attention weights (for threshold sweeps)
+  diagnostic_report.json   FHIR R4 DiagnosticReport containing:
+                             - tumor probability (Observation)
+                             - heatmap (media attachment)
+                             - top-k retrieved similar cases (derivedFrom)
 ```
 
 ---
 
-## 5. Evaluate against ground truth
-
-Computes IoU between predicted attention heatmap and official CAMELYON16 mask.
+## 6. Evaluate against CAMELYON16 ground truth
 
 ```bash
+# Using official mask (preferred)
 PYTHONPATH=src python scripts/eval_groundtruth.py \
     X:/Bitirme_Data/tumor/tumor_071.tif \
     --mask X:/Bitirme_Data/masks/tumor_071_mask.tif \
     --threshold 0.5
-```
 
-Or with XML polygon annotations (training set):
-
-```bash
+# Using XML polygon annotations (training set)
 PYTHONPATH=src python scripts/eval_groundtruth.py \
     X:/Bitirme_Data/tumor/tumor_069.tif \
     --xml X:/Bitirme_Data/annotations/tumor_069.xml
 ```
 
-Key flags:
-
 | Flag | Default | Notes |
 |---|---|---|
 | `--threshold` | 0.5 | binarise attention for IoU |
-| `--resolution` | 512 | evaluation grid size (pixels) |
-| `--mask` | — | official `_mask.tif` (preferred, class 2 = tumor) |
-| `--xml` | — | ASAP XML polygon annotations (fallback) |
+| `--resolution` | 512 | evaluation grid size |
+| `--mask` | — | official `_mask.tif` (value 2 = tumor) |
+| `--xml` | — | ASAP XML polygons |
 
-Metrics printed and saved to `results/<slide_id>/eval_metrics.json`:
-
-```
-IoU        : 0.xxx
-Precision  : 0.xxx
-Recall     : 0.xxx
-F1         : 0.xxx
-```
-
----
-
-## 6. Batch evaluation across multiple slides
-
-```bash
-for wsi in X:/Bitirme_Data/tumor/tumor_069.tif \
-           X:/Bitirme_Data/tumor/tumor_070.tif \
-           X:/Bitirme_Data/tumor/tumor_071.tif; do
-    mask="${wsi/_069/_069_mask}"; mask="${mask/tumor\//masks\/}"
-    # adjust path as needed
-    PYTHONPATH=src python scripts/eval_groundtruth.py "$wsi" --mask ...
-done
-```
+Metrics saved to `results/<slide_id>/eval_metrics.json`.
 
 ---
 
@@ -191,8 +181,9 @@ done
 
 | Stage | tumor_071 IoU | Notes |
 |---|---|---|
-| Random (uniform attention) | ~0.02 | untrained baseline |
-| After 20-epoch Mamba MIL | ~0.15-0.35 | depends on dataset size |
+| Untrained (uniform attention) | ~0.02 | random baseline, measured |
+| Trained SlideEncoder 20 epochs | ~0.15-0.35 | target |
+| CLAM_SB (comparison baseline) | ~0.30-0.50 | literature reference |
 
 ---
 
@@ -201,8 +192,9 @@ done
 | Problem | Fix |
 |---|---|
 | `ModuleNotFoundError: patholens` | run with `PYTHONPATH=src` |
-| `huggingface_hub` login hangs | put HF token in `~/.cache/huggingface/token` |
-| UnicodeEncodeError in terminal | `set PYTHONIOENCODING=utf-8` or redirect to file |
-| `TIFFRGBAImageGet failed` on mask | handled automatically (pyramid level fallback) |
-| FAISS index not found | retrieval step skipped, pipeline continues |
-| `checkpoints/slide_encoder_final.pt` missing | Step 3 passes raw UNI features, pipeline continues |
+| HuggingFace login hangs | put token in `~/.cache/huggingface/token` |
+| UnicodeEncodeError in terminal | set `PYTHONIOENCODING=utf-8` |
+| `TIFFRGBAImageGet failed` on mask | handled automatically (pyramid fallback) |
+| No checkpoint found | Step 3 uses uniform attention, pipeline continues |
+| No FAISS index found | retrieval skipped, pipeline continues |
+| Caching job killed / interrupted | re-run same command -- already-cached NPZs are skipped |
